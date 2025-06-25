@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keke AI Python - GUI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/leaderboard.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Keke AI Python - Interfaccia Grafica</h1>
+        <div class="controls">
+            <div class="control-group">
+                <label for="agent-select">Agente:</label>
+                <select id="agent-select"></select>
+            </div>
+            <div class="control-group">
+                <label for="levelset-select">Set di Livelli:</label>
+                <select id="levelset-select"></select>
+            </div>
+            <div class="control-group">
+                <label for="iterations-input">Iterazioni:</label>
+                <input type="number" id="iterations-input" value="1000" min="1">
+            </div>
+            <div class="control-group cache-control">
+                <label for="use-cache">
+                    <input type="checkbox" id="use-cache"> Usa Cache
+                </label>
+                <button id="clear-cache-btn" class="secondary-button">Pulisci Cache</button>
+                <button id="leaderboard-btn" class="secondary-button">🏆 Classifica</button>
+            </div>
+            <div class="control-group">
+                <button id="solve-btn">Risolvi Livelli</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="status-bar">
+            <div class="status">
+                <span id="status-message">Pronto</span>
+                <div class="loading-indicator" id="loading-indicator" style="display: none;"></div>
+            </div>
+            
+            <!-- Barra di progresso -->
+            <div class="progress-container" id="progress-container" style="display: none;">
+                <div class="progress-label">Progresso: <span id="progress-text">0/0</span></div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+            </div>
+            
+            <div class="metrics">
+                <div class="metric">
+                    <span class="metric-label">Livelli Totali:</span>
+                    <span class="metric-value" id="total-levels">0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Livelli Risolti:</span>
+                    <span class="metric-value" id="solved-levels">0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Accuratezza:</span>
+                    <span class="metric-value" id="accuracy">0%</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Tempo Medio:</span>
+                    <span class="metric-value" id="average-time">0s</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Iterazioni Medie:</span>
+                    <span class="metric-value" id="average-iterations">0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Efficienza Media:</span>
+                    <span class="metric-value" id="average-efficiency">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="level-and-game-container">
+            <div class="levels-container">
+                <table id="level-table">
+                    <thead>
+                        <tr class="header">
+                            <th>ID</th>
+                            <th>Stato</th>
+                            <th>Iterazioni</th>
+                            <th>Tempo (s)</th>
+                            <th>Soluzione</th>
+                            <th>Efficienza</th>
+                            <th>Visualizza</th>
+                        </tr>
+                    </thead>
+                    <tbody id="levels-body">
+                        <!-- Le righe dei livelli verranno inserite qui da JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="game-view-container" id="game-view-container" style="display: none;">
+                <h2>Visualizzazione Gioco</h2>
+                <div id="game-info">
+                    <p>Livello: <span id="game-level-id">-</span></p>
+                </div>
+                <div id="game-canvas-container">
+                    <canvas id="game-canvas" width="400" height="400"></canvas>
+                </div>
+                <div class="game-controls">
+                    <button id="prev-step-btn" disabled>Passo Precedente</button>
+                    <button id="next-step-btn" disabled>Passo Successivo</button>
+                    <button id="play-solution-btn" disabled>Avvia Soluzione</button>
+                     <button id="close-game-view-btn">Chiudi Visualizzazione</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Carica prima il modulo di visualizzazione del gioco -->
+    <script src="{{ url_for('static', filename='js/game-visualization.js') }}"></script>
+    <!-- Carica il modulo della classifica -->
+    <script src="{{ url_for('static', filename='js/leaderboard.js') }}"></script>
+    <!-- Poi carica lo script principale -->
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>
