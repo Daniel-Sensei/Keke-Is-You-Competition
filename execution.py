@@ -15,7 +15,7 @@ from baba import GameState, Direction, make_level, advance_game_state, check_win
 
 
 class Execution:
-    def __init__(self, agent_path, level_path, iter_cap=1000, use_cache=False):
+    def __init__(self, agent_path, level_path, iter_cap=100, use_cache=False):
         """
         Inizializza un'istanza di esecuzione.
         

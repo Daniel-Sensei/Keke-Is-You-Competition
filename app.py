@@ -72,7 +72,7 @@ def solve_level_set():
     data = request.get_json()
     agent_id = data.get('agent')
     level_set_id = data.get('levelSet')
-    iterations = data.get('iterations', 1000) # Valore di default per le iterazioni
+    iterations = data.get('iterations', 100) # Valore di default per le iterazioni
     use_cache = data.get('useCache', False)   # Nuovo parametro per utilizzare la cache
     
     if not agent_id or not level_set_id:
