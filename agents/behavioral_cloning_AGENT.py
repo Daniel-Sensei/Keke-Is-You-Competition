@@ -79,6 +79,13 @@ class BEHAVIORAL_CLONINGAgent(BaseAgent):
         if TF_AVAILABLE and os.path.exists(model_path):
             try:
                 self.model = keras.models.load_model(model_path)
+                
+                # Opzionale: Costruisci le metriche per evitare il warning
+                # Fai una predizione dummy per inizializzare le metriche
+                if hasattr(self.model, 'built') and self.model.built:
+                    dummy_input = np.zeros((1, FEATURE_VECTOR_SIZE), dtype=np.float32)
+                    _ = self.model.predict(dummy_input, verbose=0)
+                
                 print(f"INFO: Successfully loaded trained Keras model from '{model_path}'")
                 return
             except Exception as e:
