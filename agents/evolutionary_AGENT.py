@@ -4,42 +4,41 @@ from base_agent import BaseAgent
 from baba import GameState, Direction, advance_game_state, check_win
 from typing import List, Tuple, Any, Dict, Set, FrozenSet
 from tqdm import trange
-import copy
+import numpy as np
 
 #
-# VERSIONE 15.0 - EVOLUZIONE CON SPECIAZIONE COMPORTAMENTALE
+# VERSIONE 16.1 - CORREZIONE BUG KeyError
 #
-# Questa versione implementa una tecnica avanzata per mantenere la diversità
-# e risolvere puzzle multi-stadio che ingannavano le versioni precedenti.
-# Sostituisce il meccanismo del "cataclisma" con un approccio più elegante.
-#
-# 1. SPECIAZIONE (NICHING): La popolazione viene suddivisa in "specie" basate
-#    sul loro comportamento (definito come l'insieme di regole che creano).
-# 2. FITNESS CONDIVISA: Il fitness di ogni individuo viene diviso per il numero
-#    di individui nella sua specie. Questo penalizza le strategie sovraffollate
-#    (ottimi locali) e premia le soluzioni uniche e innovative.
-# 3. CONSERVAZIONE DI STRATEGIE MULTIPLE: Questo approccio permette all'agente di
-#    esplorare e mantenere attive più strategie promettenti contemporaneamente,
-#    essenziale per i puzzle che richiedono una sequenza di scoperte logiche.
+# Corregge un KeyError che si verificava perché la chiave 'behavior'
+# non veniva aggiunta al dizionario dell'individuo, causando un crash
+# durante l'aggiornamento dell'archivio della novità.
 #
 class EVOLUTIONARYAgent(BaseAgent):
-    """
-    Agente evolutivo con speciazione comportamentale per preservare la diversità.
-    """
-    def __init__(self, population_size=40, generations=100, mutation_rate=0.15, solution_length=80, local_search_steps=5,
-                 w_distance=0.5, w_rule_change=500.0, w_exploration=10.0):
+    def __init__(self, population_size=40, generations=100, mutation_rate=0.15, solution_length=100,
+                 w_objective=0.2,
+                 w_novelty=0.8,
+                 novelty_k=10,
+                 novelty_threshold=0.8,
+                 rule_dist_weight=10.0):
         
         self.population_size = population_size
         self.generations = generations
         self.mutation_rate = mutation_rate
         self.solution_length = solution_length
-        self.local_search_steps = local_search_steps
         self.possible_actions = [Direction.Up, Direction.Down, Direction.Left, Direction.Right, Direction.Wait]
         self.cache: Dict[Tuple[Direction, ...], GameState] = {}
         
-        self.w_distance = w_distance
-        self.w_rule_change = w_rule_change
-        self.w_exploration = w_exploration
+        self.w_objective = w_objective
+        self.w_novelty = w_novelty
+        self.novelty_k = novelty_k
+        self.novelty_threshold = novelty_threshold
+        self.rule_dist_weight = rule_dist_weight
+        
+        self.archive: List[Tuple[Tuple[int, int], FrozenSet[str]]] = []
+
+        self.w_distance = 0.5
+        self.w_rule_change = 500.0
+        self.w_exploration = 10.0
         self.visited_coords: Set[Tuple[int, int]] = set()
 
     def _get_manhattan_distance(self, state: GameState) -> float:
@@ -52,39 +51,58 @@ class EVOLUTIONARYAgent(BaseAgent):
         return frozenset(state.rules)
 
     def _get_final_state(self, initial_state: GameState, sequence: Tuple[Direction, ...]) -> GameState:
-        """Ottiene lo stato finale di una sequenza, usando la cache."""
-        if sequence in self.cache:
-            return self.cache[sequence]
-
+        if sequence in self.cache: return self.cache[sequence]
         current_state = initial_state
-        # Ottimizzazione: trova il prefisso più lungo in cache
-        for i in range(len(sequence), 0, -1):
-            prefix = sequence[:i]
-            if prefix in self.cache:
-                current_state = self.cache[prefix]
-                break
-        else: i = 0
+        i = 0
+        if len(sequence) > 0:
+            for i in range(len(sequence), 0, -1):
+                prefix = sequence[:i]
+                if prefix in self.cache:
+                    current_state = self.cache[prefix]
+                    break
+            else: i = 0
         
-        # Simula solo la parte non in cache
         for j in range(i, len(sequence)):
             current_state = advance_game_state(sequence[j], current_state.copy())
             self.cache[sequence[:j+1]] = current_state
-        
         return current_state
+
+    def _get_behavior_characterization(self, state: GameState) -> Tuple[Tuple[int, int], FrozenSet[str]]:
+        player_pos = (state.players[0].x, state.players[0].y) if state.players else (-1, -1)
+        rules = self._get_rules(state)
+        return (player_pos, rules)
+
+    def _get_behavior_distance(self, beh1: Tuple, beh2: Tuple) -> float:
+        pos1, rules1 = beh1
+        pos2, rules2 = beh2
+        pos_dist = abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+        intersection_size = len(rules1.intersection(rules2))
+        union_size = len(rules1.union(rules2))
+        rule_dist = 1.0 - (intersection_size / union_size) if union_size > 0 else 0.0
+        return pos_dist + self.rule_dist_weight * rule_dist
+
+    def _calculate_novelty(self, behavior: Tuple) -> float:
+        if not self.archive:
+            return self.novelty_threshold * 2
         
-    def _calculate_fitness(self, initial_state: GameState, sequence: List[Direction]) -> Tuple[float, int, FrozenSet[str]]:
-        """Calcola il fitness e restituisce anche il set di regole finale per la speciazione."""
+        distances = [self._get_behavior_distance(behavior, other) for other in self.archive]
+        distances.sort()
+        k_neighbors = distances[:self.novelty_k]
+        return np.mean(k_neighbors) if k_neighbors else 0.0
+
+    def _calculate_objective_fitness(self, initial_state: GameState, sequence: List[Direction]) -> Tuple[float, int, GameState]:
         best_intermediate_fitness = -float('inf')
         current_state = initial_state
         previous_rules = self._get_rules(initial_state)
 
         for k, action in enumerate(sequence):
             prefix = tuple(sequence[:k+1])
-            current_state = self._get_final_state(initial_state, prefix) # Usa l'helper per la simulazione
+            current_state = self._get_final_state(initial_state, prefix)
             
             if check_win(current_state):
                 win_step = k + 1
-                return 10000.0 - (win_step * 10), win_step, self._get_rules(current_state)
+                fitness = 10000.0 - (win_step * 10)
+                return fitness, win_step, current_state
 
             rule_change_bonus = 0.0
             current_rules = self._get_rules(current_state)
@@ -105,67 +123,63 @@ class EVOLUTIONARYAgent(BaseAgent):
             if current_fitness > best_intermediate_fitness:
                 best_intermediate_fitness = current_fitness
 
-        final_rules = self._get_rules(self._get_final_state(initial_state, tuple(sequence)))
-        return best_intermediate_fitness - (len(sequence) * 0.01), -1, final_rules
+        final_state = self._get_final_state(initial_state, tuple(sequence))
+        return best_intermediate_fitness - (len(sequence) * 0.01), -1, final_state
 
-    def _local_search_enhanced(self, initial_state: GameState, individual: List[Direction]) -> List[Direction]:
-        # Questa funzione ora usa _calculate_fitness che restituisce 3 valori, quindi adattiamo l'unpacking
-        current_best_seq = list(individual)
-        current_best_fitness, _, __ = self._calculate_fitness(initial_state, current_best_seq)
-
-        for _ in range(self.local_search_steps):
-            temp_seq = list(current_best_seq)
-            # ... (la logica interna rimane la stessa)
-            new_fitness, _, __ = self._calculate_fitness(initial_state, temp_seq)
-            if new_fitness > current_best_fitness:
-                current_best_fitness = new_fitness
-                current_best_seq = temp_seq
-        return current_best_seq
-    
     def _simplify_solution(self, initial_state: GameState, sequence: List[Direction]) -> List[Direction]:
-        """
-        Tenta di semplificare una sequenza vincente rimuovendo le mosse non necessarie.
-        """
         simplified_sequence = list(sequence)
         i = 0
         while i < len(simplified_sequence):
-            # Prova a rimuovere la mossa all'indice i
             test_sequence = simplified_sequence[:i] + simplified_sequence[i+1:]
-            
-            # Simula per vedere se la sequenza più corta vince ancora
+            if not test_sequence: break
             final_state = self._get_final_state(initial_state, tuple(test_sequence))
-            
             if check_win(final_state):
-                # La rimozione ha avuto successo, la sequenza è ora più corta.
-                # Riman_i allo stesso indice per controllare la nuova mossa in questa posizione.
                 simplified_sequence = test_sequence
             else:
-                # La mossa era necessaria, passa alla successiva.
                 i += 1
-            
         return simplified_sequence
 
     def search(self, initial_state: GameState, iterations: int = 0) -> List[Direction]:
         self.cache.clear()
         self.visited_coords.clear()
+        self.archive = []
         population = [[random.choice(self.possible_actions) for _ in range(self.solution_length)] for _ in range(self.population_size)]
 
-        t = trange(self.generations, desc="Direct Evolution (v15 - Speciation)")
+        t = trange(self.generations, desc="Direct Evolution (v16.1 - Bugfix)")
         for gen in t:
-            # 1. Calcola il fitness GREZZO per tutta la popolazione
             pop_with_fitness = []
+
             for seq in population:
-                raw_fitness, win_step, final_rules = self._calculate_fitness(initial_state, seq)
+                objective_fitness, win_step, final_state = self._calculate_objective_fitness(initial_state, seq)
+                
                 if win_step != -1:
+                    print(f"\nSoluzione trovata alla generazione {gen}! Semplificazione in corso...")
                     return self._simplify_solution(initial_state, seq[:win_step])
-                pop_with_fitness.append({'seq': seq, 'fitness': raw_fitness, 'rules': final_rules})
-            
-            # 2. Speciazione: Raggruppa per comportamento (set di regole finali)
+                
+                behavior = self._get_behavior_characterization(final_state)
+                novelty_score = self._calculate_novelty(behavior)
+                
+                combined_fitness = (self.w_objective * objective_fitness) + (self.w_novelty * novelty_score)
+                
+                # --- INIZIO DELLA CORREZIONE ---
+                pop_with_fitness.append({
+                    'seq': seq,
+                    'fitness': combined_fitness,
+                    'rules': behavior[1],
+                    'novelty': novelty_score,
+                    'behavior': behavior  # <-- LA CHIAVE MANCANTE È STATA AGGIUNTA QUI
+                })
+                # --- FINE DELLA CORREZIONE ---
+
+            for ind in pop_with_fitness:
+                if ind['novelty'] > self.novelty_threshold:
+                    if ind['behavior'] not in self.archive:
+                         self.archive.append(ind['behavior'])
+
             species = defaultdict(list)
             for individual in pop_with_fitness:
                 species[individual['rules']].append(individual)
             
-            # 3. Calcola il Fitness Condiviso e ordina
             pop_with_shared_fitness = []
             for rule_set, individuals in species.items():
                 niche_size = len(individuals)
@@ -175,31 +189,33 @@ class EVOLUTIONARYAgent(BaseAgent):
             
             pop_with_shared_fitness.sort(key=lambda x: x['shared_fitness'], reverse=True)
             
-            best_fitness_in_gen = pop_with_shared_fitness[0]['shared_fitness']
-            t.set_postfix_str(f"Best Shared Fitness: {best_fitness_in_gen:.2f}, Niches: {len(species)}")
+            best_fitness_in_gen = pop_with_shared_fitness[0]['shared_fitness'] if pop_with_shared_fitness else 0.0
+            t.set_postfix_str(f"Best Fitness: {best_fitness_in_gen:.2f}, Niches: {len(species)}, Archive Size: {len(self.archive)}")
 
-            # 4. Selezione basata sul Fitness Condiviso
             elites_count = int(self.population_size * 0.1)
             next_generation = [d['seq'] for d in pop_with_shared_fitness[:elites_count]]
             
             sequences_for_selection = [d['seq'] for d in pop_with_shared_fitness]
             selection_weights = [d['shared_fitness'] for d in pop_with_shared_fitness]
-            min_fitness = min(selection_weights)
+            min_fitness = min(selection_weights) if selection_weights else 0
             selection_weights = [(s - min_fitness) + 1e-6 for s in selection_weights]
 
-            # 5. Crossover e Mutazione (come prima)
             while len(next_generation) < self.population_size:
-                parents = random.choices(sequences_for_selection, weights=selection_weights, k=2) if sum(selection_weights) > 0 else random.sample(sequences_for_selection, k=2)
+                if sum(selection_weights) > 0:
+                    parents = random.choices(sequences_for_selection, weights=selection_weights, k=2)
+                else:
+                    parents = random.sample(sequences_for_selection, k=2) if len(sequences_for_selection) >= 2 else [random.choice(sequences_for_selection), random.choice(sequences_for_selection)]
+
                 point = random.randint(1, self.solution_length - 1)
                 child = parents[0][:point] + parents[1][point:]
                 for i in range(len(child)):
                     if random.random() < self.mutation_rate: child[i] = random.choice(self.possible_actions)
-                child = self._local_search_enhanced(initial_state, child)
                 next_generation.append(child)
                 
             population = next_generation
 
         t.close()
         print("No solution found, returning best sequence from the final population.")
-        # Restituisce la migliore sequenza basata sul fitness condiviso
+        if not pop_with_shared_fitness:
+             return [] # Restituisce una soluzione vuota se non trova nulla
         return pop_with_shared_fitness[0]['seq']
