@@ -44,32 +44,21 @@ class HeapQEntry:
             return self.g_score > other.g_score
         return self.tie_breaker < other.tie_breaker
 
-# --- Classe Agente A* (Modificata) ---
+# --- Classe Agente A* (Corretta) ---
 class A_STARAgent(BaseAgent):
     def __init__(self):
         super().__init__()
-        self.max_iterations = 20000
+        self.max_iterations = 200000
         self.counter = itertools.count()
-        
-        # --- MODIFICA ---
-        # Abbiamo ridotto il peso per la formazione delle regole a 1.0.
-        # Un valore > 1 rende l'euristica "inammissibile", il che significa che può
-        # sovrastimare il costo reale. Questo la rende più "avida" ma meno affidabile.
-        # Riportandola a 1.0, l'algoritmo A* torna ad essere ammissibile (se l'euristica di base lo è),
-        # garantendo di trovare il percorso più breve, anche se potrebbe richiedere più tempo per farlo.
-        # Questo rende l'agente più sistematico e meno prono a finire in vicoli ciechi.
         self.W_REACH_WIN = 1.0
         self.W_FORM_RULE = 1.0
         self.P_NO_WIN_RULE = 100
         self.P_NO_YOU_RULE = 500
 
     def search(self, initial_state: GameState, iterations: int = 10000) -> Optional[List[Direction]]:
-        print("--- Inizio Ricerca A* (Versione Modificata) ---")
-        
         start_h = self._heuristic(initial_state)
         if start_h == float('inf'):
-            print("Stato iniziale non risolvibile.")
-            return None
+           return None
             
         open_set = [HeapQEntry(start_h, 0, next(self.counter), [], initial_state)]
         closed_set = {}
@@ -78,22 +67,14 @@ class A_STARAgent(BaseAgent):
         if initial_hash:
             closed_set[initial_hash] = 0
             
-        # --- MODIFICA ---
-        # Il problema principale era il limite di 100 iterazioni imposto dall'esterno.
-        # Ignoriamo il parametro 'iterations' e usiamo il nostro limite di classe,
-        # 'self.max_iterations', che è molto più generoso e adatto alla complessità del gioco.
-        # Questo dà all'agente il "respiro" necessario per esplorare a fondo lo spazio di ricerca.
-        print(f"Limite iterazioni impostato a: {self.max_iterations}")
         for i in range(self.max_iterations):
             if not open_set:
-                print("Ricerca A* fallita: open set vuoto.")
                 break
 
             current_entry = heapq.heappop(open_set)
             g_score, actions, current_state = current_entry.g_score, current_entry.actions, current_entry.state
             
             if check_win(current_state):
-                print(f"Soluzione A* trovata in {len(actions)} mosse dopo {i} iterazioni!")
                 return actions
 
             for direction in [Direction.Up, Direction.Down, Direction.Left, Direction.Right]:
@@ -114,12 +95,9 @@ class A_STARAgent(BaseAgent):
                 f_score = new_g_score + h_score
                 heapq.heappush(open_set, HeapQEntry(f_score, new_g_score, next(self.counter), actions + [direction], next_state))
 
-        print("Ricerca A* terminata: nessuna soluzione trovata entro il limite di iterazioni.")
         return None
 
     def _heuristic(self, state: GameState) -> float:
-        # La logica interna dell'euristica rimane invariata, ma beneficerà
-        # del peso W_FORM_RULE corretto e di un hashing più robusto.
         if check_win(state):
             return 0
         if not state.players:
@@ -130,40 +108,67 @@ class A_STARAgent(BaseAgent):
         has_win = bool(rule_analysis['win_rules'])
 
         if has_you and has_win:
-            min_dist = float('inf')
-            if not state.winnables: return float('inf')
-            for player in state.players:
-                for winnable in state.winnables:
-                    dist = manhattan_distance((player.x, player.y), (winnable.x, winnable.y))
-                    min_dist = min(min_dist, dist)
-            return min_dist * self.W_REACH_WIN
+            # Caso 1: Ci sono oggetti "winnable" sulla mappa.
+            # L'obiettivo è raggiungerli.
+            if state.winnables:
+                min_dist = float('inf')
+                for player in state.players:
+                    for winnable in state.winnables:
+                        dist = manhattan_distance((player.x, player.y), (winnable.x, winnable.y))
+                        min_dist = min(min_dist, dist)
+                return min_dist * self.W_REACH_WIN
+            # --- MODIFICA CHIAVE ---
+            # Caso 2: Esiste una regola '... IS WIN', ma nessun oggetto corrispondente.
+            # (es. 'FLAG IS WIN' ma non ci sono FLAG).
+            # L'obiettivo diventa creare l'oggetto mancante.
+            else:
+                # Estrae il nome dell'oggetto da creare (es. 'flag' da 'flag-is-win').
+                winnable_noun = rule_analysis['win_rules'][0].split('-is-')[0]
+                # Calcola il costo per formare una regola come 'ROCK IS FLAG'.
+                cost = self._estimate_rule_formation_cost(state, winnable_noun)
+                if cost == float('inf'):
+                    return float('inf')
+                # Aggiunge una penalità perché creare una regola è più complesso che muoversi.
+                return self.P_NO_WIN_RULE + cost
 
+        # Se non c'è una regola '... IS YOU', calcola il costo per crearla.
         if not has_you:
             cost = self._estimate_rule_formation_cost(state, 'you')
             return self.P_NO_YOU_RULE + cost
 
+        # Se non c'è una regola '... IS WIN', calcola il costo per crearla.
         if not has_win:
             cost = self._estimate_rule_formation_cost(state, 'win')
             return self.P_NO_WIN_RULE + cost
             
         return float('inf')
 
-    def _estimate_rule_formation_cost(self, state: GameState, rule_property: str) -> float:
+    # --- MODIFICA CHIAVE ---
+    # La funzione è stata generalizzata per stimare il costo di formare una regola
+    # con qualsiasi proprietà, non solo 'you' o 'win'.
+    def _estimate_rule_formation_cost(self, state: GameState, target_property_name: str) -> float:
+        """Stima il costo per creare una regola del tipo '[NOME] IS [target_property_name]'."""
         nouns = [w for w in state.words if w.object_type == GameObjectType.Word and w.name != 'is']
         is_words = find_word_objects(state, 'is')
-        property_words = find_word_objects(state, rule_property)
+        # Trova le parole corrispondenti alla proprietà obiettivo (es. 'win', 'you', 'flag').
+        property_words = find_word_objects(state, target_property_name)
 
         if not nouns or not is_words or not property_words:
             return float('inf')
 
         min_formation_dist = float('inf')
 
+        # Calcola la distanza minima per allineare NOME + IS + PROPRIETÀ.
         for noun in nouns:
+            # Non consideriamo regole auto-referenziali inutili come 'FLAG IS FLAG'.
+            if noun.name == target_property_name:
+                continue
             dist_to_is = min([manhattan_distance((noun.x, noun.y), (iw.x, iw.y)) for iw in is_words])
             dist_to_prop = min([manhattan_distance((noun.x, noun.y), (pw.x, pw.y)) for pw in property_words])
             current_dist = dist_to_is + dist_to_prop
             min_formation_dist = min(min_formation_dist, current_dist)
 
+        # Aggiunge la distanza del giocatore più vicino necessario per spingere i blocchi.
         if state.players:
             player_dist = min([manhattan_distance((p.x, p.y), (n.x, n.y)) for p in state.players for n in nouns])
             return (min_formation_dist + player_dist) * self.W_FORM_RULE
@@ -182,13 +187,6 @@ class A_STARAgent(BaseAgent):
         word_pos = sorted([(w.name, w.x, w.y) for w in state.words])
         components.append(f"W:{','.join(map(str, word_pos))}")
         
-        # --- MODIFICA ---
-        # Abbiamo modificato l'hashing per includere la posizione di TUTTI gli oggetti fisici
-        # (state.phys), non solo un sottoinsieme o quelli attualmente 'pushable'.
-        # Questo rende l'hash più robusto, poiché cattura lo stato di ogni singolo blocco sulla mappa.
-        # In questo modo, si evita che l'agente confonda due stati in cui un oggetto
-        # (non tracciato in precedenza) è stato spostato, impedendogli di bloccare per errore
-        # un percorso di soluzione valido.
         phys_pos = sorted([(o.name, o.x, o.y) for o in state.phys])
         components.append(f"O:{','.join(map(str, phys_pos))}")
         
