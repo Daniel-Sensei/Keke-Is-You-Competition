@@ -1,7 +1,7 @@
 import heapq
 import itertools
 import time
-from typing import List, Dict, Tuple, Set, Optional
+from typing import List, Dict, Tuple, Optional
 
 from base_agent import BaseAgent
 from baba import (GameState, Direction, GameObj, GameObjectType, advance_game_state,
@@ -54,9 +54,13 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
             'you': 0.5
         }
 
+        # Cambio di strategia dopo 200 secondi
+        self.backup_heuristic_mode = False
+        self.backup_trigger_time = 200
+
     def search(self, initial_state: GameState, iterations: int = 10000) -> Optional[List[Direction]]:
         start_time = time.time()
-        time_limit = 400  # secondi
+        time_limit = 400  # tempo massimo assoluto
         open_set = []
         closed_set = {}
 
@@ -68,8 +72,15 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
         closed_set[self._get_state_hash(initial_state)] = 0
 
         for _ in range(self.max_iterations):
-            if time.time() - start_time > time_limit:
+            elapsed = time.time() - start_time
+            if elapsed > time_limit:
                 return None
+
+            # Attiva modalità alternativa dopo 200s
+            if not self.backup_heuristic_mode and elapsed > self.backup_trigger_time:
+                print("🟡 Timeout parziale superato: attivo modalità euristica secondaria.")
+                self.backup_heuristic_mode = True
+
             if not open_set:
                 break
 
@@ -120,11 +131,16 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
             'you': h_you
         }
 
-        total_score = (
-            self.weights['dist'] * contribs['dist'] +
-            self.weights['win'] * contribs['win'] +
-            self.weights['you'] * contribs['you']
-        )
+        if self.backup_heuristic_mode:
+            # 🌙 Modalità alternativa: ignora distanza, focus su creare regole
+            total_score = h_win + h_you
+        else:
+            total_score = (
+                self.weights['dist'] * contribs['dist'] +
+                self.weights['win'] * contribs['win'] +
+                self.weights['you'] * contribs['you']
+            )
+
         return total_score, contribs
 
     def heuristic_distance_to_win(self, state: GameState) -> float:
@@ -160,7 +176,7 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
 
         total = sum(self.weights.values())
         for k in self.weights:
-            self.weights[k] /= total  # Normalizza i pesi
+            self.weights[k] /= total  # normalizza
 
     def _get_state_hash(self, state: GameState) -> str:
         if not state.players:
