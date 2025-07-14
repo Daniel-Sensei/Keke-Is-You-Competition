@@ -45,7 +45,7 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
         self.max_iterations = 200000
         self.counter = itertools.count()
         self.max_path_length = 40
-        self.learning_rate = 0.05
+        self.learning_rate = 0.01
 
         # Pesi dinamici delle euristiche
         self.weights = {
@@ -53,7 +53,7 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
             'win': 0.5,
             'you': 0.5
         }
-
+        
         # Cambio di strategia dopo 200 secondi
         self.backup_heuristic_mode = False
         self.backup_trigger_time = 200
