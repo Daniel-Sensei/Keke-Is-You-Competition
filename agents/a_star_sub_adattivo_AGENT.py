@@ -4,14 +4,16 @@ import time
 from typing import List, Dict, Tuple, Optional
 
 from base_agent import BaseAgent
-from baba import (GameState, Direction, GameObj, GameObjectType, advance_game_state,
-                  check_win)
+from baba import (GameState, Direction, GameObj, advance_game_state, check_win)
+
 
 def manhattan_distance(p1: Tuple[int, int], p2: Tuple[int, int]) -> int:
     return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
+
 def find_word_objects(state: GameState, word_name: str) -> List[GameObj]:
     return [w for w in state.words if w.name == word_name]
+
 
 def analyze_current_rules(state: GameState) -> Dict[str, List[str]]:
     rule_analysis = {'you_rules': [], 'win_rules': [], 'other_rules': []}
@@ -23,6 +25,7 @@ def analyze_current_rules(state: GameState) -> Dict[str, List[str]]:
         else:
             rule_analysis['other_rules'].append(rule)
     return rule_analysis
+
 
 class HeapQEntry:
     def __init__(self, priority: float, g_score: int, tie_breaker: int, actions: List[Direction], state: GameState):
@@ -39,7 +42,8 @@ class HeapQEntry:
             return self.g_score > other.g_score
         return self.tie_breaker < other.tie_breaker
 
-class A_STAR_ADATTIVOAgent(BaseAgent):
+
+class A_STAR_SUB_ADATTIVOAgent(BaseAgent):
     def __init__(self):
         super().__init__()
         self.max_iterations = 200000
@@ -47,20 +51,40 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
         self.max_path_length = 40
         self.learning_rate = 0.0001
 
-        # Pesi dinamici delle euristiche
         self.weights = {
             'dist': 1.0,
             'win': 0.5,
             'you': 0.5
         }
-        
-        # Cambio di strategia dopo 200 secondi
+
         self.backup_heuristic_mode = False
         self.backup_trigger_time = 200
 
     def search(self, initial_state: GameState, iterations: int = 10000) -> Optional[List[Direction]]:
         start_time = time.time()
-        time_limit = 400  # tempo massimo assoluto
+        self.backup_heuristic_mode = False
+
+        goal_stack = self._identify_goal_stack(initial_state)
+        total_plan: List[Direction] = []
+        current_state = initial_state.copy()
+
+        for subgoal in goal_stack:
+            print(f"🎯 Risolvendo sotto-obiettivo: {subgoal['name']}")
+            plan = self._search_for_subgoal(current_state, subgoal, start_time)
+            if not plan:
+                print(f"❌ Fallito su obiettivo: {subgoal['name']}")
+                print("🔁 Fallback: eseguo A* standard su stato iniziale...")
+                return self._search_plain(initial_state, start_time)
+            for move in plan:
+                current_state = advance_game_state(move, current_state.copy())
+            total_plan.extend(plan)
+
+            if check_win(current_state):
+                break
+
+        return total_plan if check_win(current_state) else self._search_plain(initial_state, start_time)
+
+    def _search_plain(self, initial_state: GameState, start_time: float) -> Optional[List[Direction]]:
         open_set = []
         closed_set = {}
 
@@ -73,10 +97,8 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
 
         for _ in range(self.max_iterations):
             elapsed = time.time() - start_time
-            if elapsed > time_limit:
+            if elapsed > 400:
                 return None
-
-            # Attiva modalità alternativa dopo 200s
             if not self.backup_heuristic_mode and elapsed > self.backup_trigger_time:
                 print("🟡 Timeout parziale superato: attivo modalità euristica secondaria.")
                 self.backup_heuristic_mode = True
@@ -99,7 +121,7 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
                 new_g_score = g_score + 1
                 state_hash = self._get_state_hash(next_state)
 
-                if state_hash and new_g_score >= closed_set.get(state_hash, float('inf')):
+                if new_g_score >= closed_set.get(state_hash, float('inf')):
                     continue
 
                 h_score, contribs = self._combined_heuristic(next_state)
@@ -113,35 +135,84 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
         self._update_heuristic_weights(False, contribs)
         return None
 
-    def _combined_heuristic(self, state: GameState) -> Tuple[float, Dict[str, float]]:
-        if check_win(state):
-            return 0, {'dist': 0, 'win': 0, 'you': 0}
-
+    def _identify_goal_stack(self, state: GameState) -> List[Dict]:
         rule_analysis = analyze_current_rules(state)
-        has_you = bool(rule_analysis['you_rules'])
-        has_win = bool(rule_analysis['win_rules'])
+        goals = []
 
-        h_dist = self.heuristic_distance_to_win(state) if has_you and has_win else float('inf')
-        h_win = self.heuristic_rule_formation(state, 'win') if not has_win else 0
-        h_you = self.heuristic_rule_formation(state, 'you') if not has_you else 0
+        if not rule_analysis['you_rules']:
+            goals.append({'name': 'CREA YOU', 'target_rule': 'you'})
+        if not rule_analysis['win_rules']:
+            goals.append({'name': 'CREA WIN', 'target_rule': 'win'})
+        if rule_analysis['you_rules'] and rule_analysis['win_rules']:
+            goals.append({'name': 'RAGGIUNGI OGGETTO VINCENTE', 'target_rule': None})
 
-        contribs = {
-            'dist': h_dist if h_dist != float('inf') else 0,
-            'win': h_win,
-            'you': h_you
-        }
+        return goals
 
-        if self.backup_heuristic_mode:
-            # 🌙 Modalità alternativa: ignora distanza, focus su creare regole
-            total_score = h_win + h_you
+    def _search_for_subgoal(self, start_state: GameState, subgoal: Dict, start_time: float) -> Optional[List[Direction]]:
+        open_set = []
+        closed_set = {}
+        self.counter = itertools.count()
+
+        if subgoal['target_rule'] == 'you':
+            h_score = self.heuristic_rule_formation(start_state, 'you')
+        elif subgoal['target_rule'] == 'win':
+            h_score = self.heuristic_rule_formation(start_state, 'win')
         else:
-            total_score = (
-                self.weights['dist'] * contribs['dist'] +
-                self.weights['win'] * contribs['win'] +
-                self.weights['you'] * contribs['you']
-            )
+            h_score = self.heuristic_distance_to_win(start_state)
 
-        return total_score, contribs
+        if h_score == float('inf'):
+            return None
+
+        heapq.heappush(open_set, HeapQEntry(h_score, 0, next(self.counter), [], start_state))
+        closed_set[self._get_state_hash(start_state)] = 0
+
+        while open_set and (time.time() - start_time) < 400:
+            elapsed = time.time() - start_time
+            if not self.backup_heuristic_mode and elapsed > self.backup_trigger_time:
+                print("🟡 Timeout parziale superato: attivo modalità euristica secondaria.")
+                self.backup_heuristic_mode = True
+
+            current = heapq.heappop(open_set)
+            g_score, actions, state = current.g_score, current.actions, current.state
+
+            if self._goal_reached(state, subgoal):
+                return actions
+
+            for direction in [Direction.Up, Direction.Down, Direction.Left, Direction.Right]:
+                if len(actions) >= self.max_path_length:
+                    continue
+
+                next_state = advance_game_state(direction, state.copy())
+                new_g_score = g_score + 1
+                state_hash = self._get_state_hash(next_state)
+
+                if new_g_score >= closed_set.get(state_hash, float('inf')):
+                    continue
+
+                if subgoal['target_rule'] == 'you':
+                    h_score = self.heuristic_rule_formation(next_state, 'you')
+                elif subgoal['target_rule'] == 'win':
+                    h_score = self.heuristic_rule_formation(next_state, 'win')
+                else:
+                    h_score = self.heuristic_distance_to_win(next_state)
+
+                if h_score == float('inf'):
+                    continue
+
+                closed_set[state_hash] = new_g_score
+                f_score = new_g_score + h_score
+                heapq.heappush(open_set, HeapQEntry(f_score, new_g_score, next(self.counter), actions + [direction], next_state))
+
+        return None
+
+    def _goal_reached(self, state: GameState, subgoal: Dict) -> bool:
+        rules = analyze_current_rules(state)
+        if subgoal['target_rule'] == 'you':
+            return bool(rules['you_rules'])
+        elif subgoal['target_rule'] == 'win':
+            return bool(rules['win_rules'])
+        else:
+            return check_win(state)
 
     def heuristic_distance_to_win(self, state: GameState) -> float:
         if not state.players or not state.winnables:
@@ -168,6 +239,31 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
             best = min(best, total)
         return best
 
+    def _combined_heuristic(self, state: GameState) -> Tuple[float, Dict[str, float]]:
+        if check_win(state):
+            return 0, {'dist': 0, 'win': 0, 'you': 0}
+
+        rule_analysis = analyze_current_rules(state)
+        has_you = bool(rule_analysis['you_rules'])
+        has_win = bool(rule_analysis['win_rules'])
+
+        h_dist = self.heuristic_distance_to_win(state) if has_you and has_win else float('inf')
+        h_win = self.heuristic_rule_formation(state, 'win') if not has_win else 0
+        h_you = self.heuristic_rule_formation(state, 'you') if not has_you else 0
+
+        contribs = {'dist': h_dist if h_dist != float('inf') else 0, 'win': h_win, 'you': h_you}
+
+        if self.backup_heuristic_mode:
+            total_score = h_win + h_you
+        else:
+            total_score = (
+                self.weights['dist'] * contribs['dist'] +
+                self.weights['win'] * contribs['win'] +
+                self.weights['you'] * contribs['you']
+            )
+
+        return total_score, contribs
+
     def _update_heuristic_weights(self, solved: bool, contribs: Dict[str, float]):
         α = self.learning_rate
         for k in self.weights:
@@ -176,7 +272,7 @@ class A_STAR_ADATTIVOAgent(BaseAgent):
 
         total = sum(self.weights.values())
         for k in self.weights:
-            self.weights[k] /= total  # normalizza
+            self.weights[k] /= total
 
     def _get_state_hash(self, state: GameState) -> str:
         if not state.players:
