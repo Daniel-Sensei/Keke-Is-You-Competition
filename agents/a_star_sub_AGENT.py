@@ -43,7 +43,7 @@ class HeapQEntry:
         return self.tie_breaker < other.tie_breaker
 
 # --- Agente A* con Risoluzione di Sotto-Problemi ---
-class A_STAR_SUB_ADATTIVOAgent(BaseAgent):
+class A_STAR_SUBAgent(BaseAgent):
     def __init__(self):
         super().__init__()
         self.max_iterations = 200000
