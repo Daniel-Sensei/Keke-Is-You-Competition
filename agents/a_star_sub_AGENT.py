@@ -1,3 +1,4 @@
+
 import heapq
 import itertools
 import time
@@ -42,7 +43,7 @@ class HeapQEntry:
             return self.g_score > other.g_score
         return self.tie_breaker < other.tie_breaker
 
-# --- Agente A* con Risoluzione di Sotto-Problemi ---
+# --- Agente A* con limite massimo di mosse e sotto-obiettivi ---
 class A_STAR_SUBAgent(BaseAgent):
     def __init__(self):
         super().__init__()
@@ -52,9 +53,9 @@ class A_STAR_SUBAgent(BaseAgent):
         self.W_FORM_RULE = 1.0
         self.P_NO_WIN_RULE = 100
         self.P_NO_YOU_RULE = 500
-        self.max_path_length = 60
+        self.max_path_length = 40  # Limite di mosse globale
         self.subgoal_enabled = True  # Flag per abilitare/disabilitare i sotto-obiettivi
-        self.subgoal_max_moves = 30  # Limite mosse per sotto-obiettivo
+        self.subgoal_max_moves = 20  # Limite mosse per sotto-obiettivo
 
     def search(self, initial_state: GameState, iterations: int = 10000) -> Optional[List[Direction]]:
         start_time = time.time()
@@ -93,6 +94,11 @@ class A_STAR_SUBAgent(BaseAgent):
             for move in plan:
                 current_state = advance_game_state(move, current_state.copy())
             total_plan.extend(plan)
+            
+            # Controlla il limite globale di mosse
+            if len(total_plan) > self.max_path_length:
+                print(f"⚠️ Limite globale di mosse ({self.max_path_length}) superato")
+                return None
             
             print(f"✅ Completato sotto-obiettivo: {subgoal['name']} con {len(plan)} mosse")
             
@@ -259,70 +265,80 @@ class A_STAR_SUBAgent(BaseAgent):
         return min_dist * self.W_REACH_WIN
 
     def _search_standard(self, initial_state: GameState, start_time: float) -> Optional[List[Direction]]:
-        """Ricerca A* standard (originale)"""
+        """Ricerca A* standard con limite di mosse"""
         time_limit = 400  # secondi
-        
+
         start_h = self._heuristic(initial_state)
         if start_h == float('inf'):
             return None
-        
+
         open_set = [HeapQEntry(start_h, 0, next(self.counter), [], initial_state)]
         closed_set = {}
-        
+
         initial_hash = self._get_state_hash(initial_state)
         if initial_hash:
             closed_set[initial_hash] = 0
-        
+
         for _ in range(self.max_iterations):
             if time.time() - start_time > time_limit:
                 print("⏰ Tempo massimo raggiunto per A* standard.")
                 return None
-            
+
             if not open_set:
                 break
-            
+
             current_entry = heapq.heappop(open_set)
             g_score, actions, current_state = current_entry.g_score, current_entry.actions, current_entry.state
-            
+
             if check_win(current_state):
                 return actions
-            
+
             for direction in [Direction.Up, Direction.Down, Direction.Left, Direction.Right]:
                 if len(actions) >= self.max_path_length:
-                    continue
-                
+                    continue  # Salta espansioni oltre il limite
+
                 next_state = advance_game_state(direction, current_state.copy())
                 new_g_score = g_score + 1
                 state_hash = self._get_state_hash(next_state)
-                
+
                 if state_hash and new_g_score >= closed_set.get(state_hash, float('inf')):
                     continue
-                
+
                 h_score = self._heuristic(next_state)
                 if h_score == float('inf'):
                     continue
-                
+
                 if state_hash:
                     closed_set[state_hash] = new_g_score
-                
+
                 f_score = new_g_score + h_score
                 heapq.heappush(open_set, HeapQEntry(f_score, new_g_score, next(self.counter), actions + [direction], next_state))
-        
+
         print("⚠️ Nessuna soluzione trovata entro il limite di mosse.")
         return None
 
     def _heuristic(self, state: GameState) -> float:
-        """Euristica originale completa"""
+        """Euristica principale (corretta dal secondo codice)"""
         if check_win(state):
             return 0
-        if not state.players:
-            return float('inf')
         
+        # Analizza subito le regole
         rule_analysis = analyze_current_rules(state)
         has_you = bool(rule_analysis['you_rules'])
+
+        # Se non c'è un giocatore (perché la regola 'YOU' è rotta o assente),
+        # non arrendersi. Calcola invece il costo per crearne una.
+        if not state.players or not has_you:
+            cost = self._estimate_rule_formation_cost(state, 'you')
+            # Se è impossibile creare la regola, ALLORA è infinito.
+            if cost == float('inf'):
+                return float('inf')
+            # Altrimenti, restituisci una penalità alta più il costo.
+            return self.P_NO_YOU_RULE + cost
+
         has_win = bool(rule_analysis['win_rules'])
-        
-        if has_you and has_win:
+
+        if has_win:  # has_you è già stato verificato essere True a questo punto
             if state.winnables:
                 min_dist = float('inf')
                 for player in state.players:
@@ -336,28 +352,23 @@ class A_STAR_SUBAgent(BaseAgent):
                 if cost == float('inf'):
                     return float('inf')
                 return self.P_NO_WIN_RULE + cost
-        
-        if not has_you:
-            cost = self._estimate_rule_formation_cost(state, 'you')
-            return self.P_NO_YOU_RULE + cost
-        
-        if not has_win:
+        else:  # Manca la regola WIN
             cost = self._estimate_rule_formation_cost(state, 'win')
+            if cost == float('inf'):
+                return float('inf')
             return self.P_NO_WIN_RULE + cost
-        
-        return float('inf')
 
     def _estimate_rule_formation_cost(self, state: GameState, target_property_name: str) -> float:
-        """Stima del costo per formare una regola (metodo originale)"""
+        """Stima del costo per formare una regola"""
         nouns = [w for w in state.words if w.object_type == GameObjectType.Word and w.name != 'is']
         is_words = find_word_objects(state, 'is')
         property_words = find_word_objects(state, target_property_name)
-        
+
         if not nouns or not is_words or not property_words:
             return float('inf')
-        
+
         min_formation_dist = float('inf')
-        
+
         for noun in nouns:
             if noun.name == target_property_name:
                 continue
@@ -365,28 +376,30 @@ class A_STAR_SUBAgent(BaseAgent):
             dist_to_prop = min([manhattan_distance((noun.x, noun.y), (pw.x, pw.y)) for pw in property_words])
             current_dist = dist_to_is + dist_to_prop
             min_formation_dist = min(min_formation_dist, current_dist)
-        
+
         if state.players:
             player_dist = min([manhattan_distance((p.x, p.y), (n.x, n.y)) for p in state.players for n in nouns])
             return (min_formation_dist + player_dist) * self.W_FORM_RULE
-        
+
         return min_formation_dist * self.W_FORM_RULE
 
     def _get_state_hash(self, state: GameState) -> Optional[str]:
-        """Genera hash dello stato per evitare cicli"""
-        if not state.players:
-            return "NO_PLAYERS_STATE"
-        
+        """
+        Genera un hash univoco per lo stato del gioco.
+        L'hash deve essere unico anche in assenza di giocatori,
+        basandosi sulla posizione di parole e oggetti fisici.
+        """
         components = []
-        
+
+        # Ordina le componenti per garantire un hash consistente
         player_pos = sorted([(p.x, p.y) for p in state.players])
-        components.append(f"P:{','.join(map(str, player_pos))}")
-        
         word_pos = sorted([(w.name, w.x, w.y) for w in state.words])
-        components.append(f"W:{','.join(map(str, word_pos))}")
-        
         phys_pos = sorted([(o.name, o.x, o.y) for o in state.phys])
-        components.append(f"O:{','.join(map(str, phys_pos))}")
-        
+
+        # Concatena tutte le informazioni in una stringa univoca
+        components.append(f"P:{player_pos}")
+        components.append(f"W:{word_pos}")
+        components.append(f"O:{phys_pos}")
+
         return "|".join(components)
 
