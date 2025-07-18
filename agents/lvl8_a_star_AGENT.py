@@ -56,7 +56,7 @@ class LVL8_A_STARAgent(BaseAgent):
 
     def search(self, initial_state: GameState, iterations: int = 10000) -> Optional[List[Direction]]:
         start_time = time.time()
-        time_limit = 400  # secondi
+        time_limit = 300  # secondi
 
         start_h = self._heuristic(initial_state)
         if start_h == float('inf'):
