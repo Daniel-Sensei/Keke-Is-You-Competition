@@ -38,10 +38,10 @@ class DQN(nn.Module):
         self.fc_stack = nn.Sequential(
             nn.Linear(conv_w * conv_h * 128, 512),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            # nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            #nn.Dropout(0.2),
             nn.Linear(256, n_actions)
         )
     
