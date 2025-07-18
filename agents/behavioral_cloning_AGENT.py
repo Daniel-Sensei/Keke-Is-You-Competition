@@ -1,14 +1,16 @@
-# behavioral_cloning_AGENT.py (Versione con Architettura ResNet)
+# behavioral_cloning_AGENT.py (Versione con Architettura ResNet e Beam Search Corretta)
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 import numpy as np
 from typing import Optional, List
 import os
+import copy
 
 from base_agent import BaseAgent
-from baba_env import BabaEnv
+from baba_env import BabaEnv, check_win, advance_game_state
 from baba import GameState, Direction
 
 class ResidualBlock(nn.Module):
@@ -90,17 +92,74 @@ class BEHAVIORAL_CLONINGAgent(BaseAgent):
             print(f"💾 Modello salvato con successo in '{save_path}'.")
 
     def search(self, initial_state: GameState, iterations: int) -> Optional[List[Direction]]:
-        if self.policy_net is None: self.initialize_for_inference()
-        if self.policy_net is None: return None
-        env = BabaEnv(["\n".join("".join(row) for row in initial_state.orig_map)], self.MODEL_MAX_H, self.MODEL_MAX_W)
-        state, _ = env.reset()
-        solution_path = []
-        for step in range(min(iterations, 200)):
-            with torch.no_grad():
-                state_tensor = torch.tensor(np.array(state), device=self.device, dtype=torch.float32).unsqueeze(0)
-                action = torch.argmax(self.policy_net(state_tensor), dim=1).item()
-            state, _, terminated, truncated, info = env.step(action)
-            solution_path.append(env.action_map[action])
-            if info.get('won', False): return solution_path
-            if terminated or truncated: break
+        """
+        Esegue una ricerca della soluzione usando l'algoritmo Beam Search per migliorare
+        la robustezza rispetto a una ricerca greedy.
+        """
+        if self.policy_net is None:
+            self.initialize_for_inference()
+        if self.policy_net is None:
+            return None
+
+        # --- Inizializzazione ---
+        base_env = BabaEnv(["\n".join("".join(row) for row in initial_state.orig_map)], self.MODEL_MAX_H, self.MODEL_MAX_W)
+        base_env.reset()
+        
+        # --- Parametri della Beam Search ---
+        # Correzione: assicurati che beam_width non sia maggiore del numero di azioni disponibili
+        n_actions = base_env.action_space.n
+        beam_width = min(5, n_actions) # <-- RIGA MODIFICATA E SPOSTATA
+        max_steps = min(iterations, 100)
+
+
+        # Il "beam" contiene tuple di: (log_probabilità_cumulativa, percorso_azioni, stato_ambiente_clonato)
+        beam = [(0.0, [], initial_state.copy())]
+
+        for step in range(max_steps):
+            if not beam:
+                break
+
+            potential_candidates = []
+            for log_prob, path, game_state in beam:
+                if check_win(game_state):
+                    potential_candidates.append((log_prob, path, game_state))
+                    continue
+                
+                temp_env = BabaEnv([base_env.current_ascii_map], self.MODEL_MAX_H, self.MODEL_MAX_W)
+                temp_env.state = game_state
+                temp_env.episode_steps = len(path)
+                obs = temp_env._get_obs()
+
+                with torch.no_grad():
+                    state_tensor = torch.tensor(np.array(obs), device=self.device, dtype=torch.float32).unsqueeze(0)
+                    action_log_probs = F.log_softmax(self.policy_net(state_tensor), dim=1)
+                    
+                    # Ora questa chiamata è sicura perché beam_width <= n_actions
+                    top_log_probs, top_actions = torch.topk(action_log_probs, beam_width)
+
+                    for i in range(beam_width):
+                        action_idx = top_actions[0, i].item()
+                        current_log_prob = top_log_probs[0, i].item()
+                        
+                        next_state = game_state.copy()
+                        direction = base_env.action_map[action_idx]
+                        next_state = advance_game_state(direction, next_state)
+
+                        new_path = path + [direction]
+                        new_log_prob = log_prob + current_log_prob
+                        potential_candidates.append((new_log_prob, new_path, next_state))
+
+            def score_path(candidate):
+                log_prob, path, state = candidate
+                if check_win(state): return float('inf')
+                return log_prob / len(path) if path else -float('inf')
+
+            sorted_candidates = sorted(potential_candidates, key=score_path, reverse=True)
+            beam = [(log_prob, path, state) for log_prob, path, state in sorted_candidates[:beam_width]]
+
+            if beam and check_win(beam[0][2]):
+                print(f"✨ Soluzione trovata al passo {step + 1} con Beam Search!")
+                return beam[0][1]
+
+        print("❌ Nessuna soluzione trovata entro il limite di passi con Beam Search.")
         return []
