@@ -1,188 +1,165 @@
-"""
-Behavioral Cloning Agent for KekeAI.
+# behavioral_cloning_AGENT.py (Versione con Architettura ResNet e Beam Search Corretta)
 
-This agent is designed to use a pre-trained model (e.g., a neural network)
-to decide which action to take based on the current game state. The model
-itself is trained offline using supervised learning.
-"""
-import random
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 import numpy as np
-from typing import List, Tuple, Optional, Any, Set
+from typing import Optional, List
 import os
-
-try:
-    import tensorflow as tf
-    from tensorflow import keras
-    TF_AVAILABLE = True
-except ImportError:
-    TF_AVAILABLE = False
+import copy
 
 from base_agent import BaseAgent
-from baba import GameState, Direction, advance_game_state, check_win, GameObj
+from baba_env import BabaEnv, check_win, advance_game_state
+from baba import GameState, Direction
 
-# --- State Vectorization Parameters ---
-MAX_MAP_HEIGHT = 25
-MAX_MAP_WIDTH = 25
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+    def forward(self, x):
+        identity = self.shortcut(x)
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.relu(self.bn2(self.conv2(out)) + identity)
+        return out
 
-OBJECT_NAME_TO_CHANNEL = {
-    "player_controlled": 0, "winnable_condition": 1, "pushable_physical": 2, 
-    "stopping_physical": 3, "dangerous_physical": 4, "general_physical": 5,
-    "text_baba": 6, "text_flag": 7, "text_rock": 8, "text_wall": 9,
-    "text_skull": 10, "text_keke": 11, "text_lava": 12, "text_goop": 13,
-    "text_is": 14, "text_you": 15, "text_win": 16, "text_push": 17,
-    "text_stop": 18, "text_kill": 19, "text_move": 20, "text_hot": 21,
-    "text_melt": 22, "text_sink": 23,
-}
-NUM_OBJECT_CHANNELS = len(OBJECT_NAME_TO_CHANNEL) + 1
-NUM_RULE_FEATURES = 2
-FEATURE_VECTOR_SIZE = (NUM_OBJECT_CHANNELS * MAX_MAP_HEIGHT * MAX_MAP_WIDTH) + NUM_RULE_FEATURES
-
-# Mapping actions to integer indices for model output layer, and back.
-ACTION_TO_INDEX = {Direction.Up: 0, Direction.Down: 1, Direction.Left: 2, Direction.Right: 3, Direction.Wait: 4}
-INDEX_TO_ACTION = {v: k for k, v in ACTION_TO_INDEX.items()}
-NUM_ACTIONS = len(ACTION_TO_INDEX)
-
-
-# The create_bc_model function has been moved to train_behavioral_cloning.py
-# as its primary role is for training, not for agent inference.
+class DQN_ResNet(nn.Module):
+    def __init__(self, n_channels, height, width, n_actions):
+        super(DQN_ResNet, self).__init__()
+        self.in_channels = 64
+        self.conv1 = nn.Conv2d(n_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.layer1 = self._make_layer(ResidualBlock, 64, 2, stride=1)
+        self.layer2 = self._make_layer(ResidualBlock, 128, 2, stride=2)
+        self.layer3 = self._make_layer(ResidualBlock, 256, 2, stride=2)
+        self.layer4 = self._make_layer(ResidualBlock, 512, 2, stride=2)
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc_stack = nn.Sequential(nn.Linear(512, 512), nn.ReLU(), nn.Linear(512, n_actions))
+    def _make_layer(self, block, out_channels, num_blocks, stride):
+        strides, layers = [stride] + [1] * (num_blocks - 1), []
+        for s in strides:
+            layers.append(block(self.in_channels, out_channels, s))
+            self.in_channels = out_channels
+        return nn.Sequential(*layers)
+    def forward(self, x):
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.layer4(self.layer3(self.layer2(self.layer1(out))))
+        out = self.avg_pool(out).view(out.size(0), -1)
+        return self.fc_stack(out)
 
 class BEHAVIORAL_CLONINGAgent(BaseAgent):
-    """
-    Agent that uses a pre-trained model for Behavioral Cloning.
-    It vectorizes the game state and queries the loaded model for the next action.
-    """
-
-    def __init__(self, model_path="keke_behavioral_cloning_model.h5"):
-        """
-        Initializes the agent by loading a pre-trained Keras model.
-        If loading fails or TF is unavailable, it falls back to a dummy model.
-        """
+    def __init__(self, model_path='baba_final_agent.pth'):
         super().__init__()
-        self.model: Any = None
-        self.object_name_to_channel_map = OBJECT_NAME_TO_CHANNEL
-        self.num_object_channels = NUM_OBJECT_CHANNELS
-        self._load_model(model_path)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Usando il dispositivo: {self.device}")
+        self.MODEL_PATH, self.MODEL_MAX_H, self.MODEL_MAX_W = model_path, 20, 20
+        self.policy_net, self.optimizer, self.criterion = None, None, None
 
-    def _create_dummy_model(self):
-        """Creates a dummy model that predicts random actions."""
-        class DummyModel:
-            def predict(self, vectorized_state: np.array) -> int:
-                return random.randint(0, NUM_ACTIONS - 1)
-        return DummyModel()
+    def initialize_for_training(self, n_channels, height, width, n_actions, learning_rate=1e-4):
+        self.policy_net = DQN_ResNet(n_channels, height, width, n_actions).to(self.device)
+        self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=learning_rate)
+        self.criterion = nn.CrossEntropyLoss()
+        self.policy_net.train()
+        print("Agente inizializzato per l'addestramento con la rete DQN_ResNet.")
 
-    def _load_model(self, model_path: str):
+    def initialize_for_inference(self):
+        dummy_env = BabaEnv([], self.MODEL_MAX_H, self.MODEL_MAX_W)
+        total_channels, n_actions = dummy_env.observation_space.shape[0], dummy_env.action_space.n
+        self.policy_net = DQN_ResNet(total_channels, self.MODEL_MAX_H, self.MODEL_MAX_W, n_actions).to(self.device)
+        try:
+            self.policy_net.load_state_dict(torch.load(self.MODEL_PATH, map_location=self.device))
+            self.policy_net.eval()
+            print(f"Modello caricato con successo da '{self.MODEL_PATH}'.")
+        except FileNotFoundError:
+            print(f"❌ ERRORE: File del modello non trovato in '{self.MODEL_PATH}'.")
+            self.policy_net = None
+    
+    def save_model(self, path=None):
+        save_path = path if path else self.MODEL_PATH
+        if self.policy_net:
+            torch.save(self.policy_net.state_dict(), save_path)
+            print(f"💾 Modello salvato con successo in '{save_path}'.")
+
+    def search(self, initial_state: GameState, iterations: int) -> Optional[List[Direction]]:
         """
-        Attempts to load a trained Keras model from `model_path`.
-        If TF is not available, the model file doesn't exist, or loading fails,
-        it falls back to a DummyModel.
+        Esegue una ricerca della soluzione usando l'algoritmo Beam Search per migliorare
+        la robustezza rispetto a una ricerca greedy.
         """
-        if TF_AVAILABLE and os.path.exists(model_path):
-            try:
-                self.model = keras.models.load_model(model_path)
-                
-                # Opzionale: Costruisci le metriche per evitare il warning
-                # Fai una predizione dummy per inizializzare le metriche
-                if hasattr(self.model, 'built') and self.model.built:
-                    dummy_input = np.zeros((1, FEATURE_VECTOR_SIZE), dtype=np.float32)
-                    _ = self.model.predict(dummy_input, verbose=0)
-                
-                print(f"INFO: Successfully loaded trained Keras model from '{model_path}'")
-                return
-            except Exception as e:
-                print(f"ERROR: Failed to load Keras model from '{model_path}'. Error: {e}")
+        if self.policy_net is None:
+            self.initialize_for_inference()
+        if self.policy_net is None:
+            return None
+
+        # --- Inizializzazione ---
+        base_env = BabaEnv(["\n".join("".join(row) for row in initial_state.orig_map)], self.MODEL_MAX_H, self.MODEL_MAX_W)
+        base_env.reset()
         
-        # Fallback to DummyModel if any of the above conditions fail.
-        if not self.model:
-            if not TF_AVAILABLE:
-                print("INFO: TensorFlow not available.")
-            elif not os.path.exists(model_path):
-                print(f"WARNING: Model file not found at '{model_path}'.")
-            
-            print("INFO: BehavioralCloningAgent is falling back to a DUMMY model (predicts random actions).")
-            self.model = self._create_dummy_model()
+        # --- Parametri della Beam Search ---
+        # Correzione: assicurati che beam_width non sia maggiore del numero di azioni disponibili
+        n_actions = base_env.action_space.n
+        beam_width = min(5, n_actions) # <-- RIGA MODIFICATA E SPOSTATA
+        max_steps = min(iterations, 100)
 
-    def _vectorize_state(self, state: GameState) -> np.array:
-        """Converts a given GameState object into a flat numerical vector."""
-        grid_representation = np.zeros((self.num_object_channels, MAX_MAP_HEIGHT, MAX_MAP_WIDTH), dtype=np.float32)
-        
-        player_obj_names: Set[str] = set()
-        winnable_obj_names: Set[str] = set()
-        pushable_obj_names: Set[str] = set()
-        stoppable_obj_names: Set[str] = set()
-        kill_obj_names: Set[str] = set()
 
-        for rule_str in state.rules:
-            parts = rule_str.split('-is-')
-            if len(parts) == 2:
-                obj_name, prop_name = parts[0], parts[1]
-                if prop_name == "you": player_obj_names.add(obj_name)
-                elif prop_name == "win": winnable_obj_names.add(obj_name)
-                elif prop_name == "push": pushable_obj_names.add(obj_name)
-                elif prop_name == "stop": stoppable_obj_names.add(obj_name)
-                elif prop_name == "kill": kill_obj_names.add(obj_name)
+        # Il "beam" contiene tuple di: (log_probabilità_cumulativa, percorso_azioni, stato_ambiente_clonato)
+        beam = [(0.0, [], initial_state.copy())]
 
-        for obj in state.phys:
-            if not hasattr(obj, 'name'): continue
-            y, x = obj.y, obj.x
-            if 0 <= y < MAX_MAP_HEIGHT and 0 <= x < MAX_MAP_WIDTH:
-                channel_idx = -1 
-                if obj.name in player_obj_names: channel_idx = self.object_name_to_channel_map["player_controlled"]
-                elif obj.name in winnable_obj_names: channel_idx = self.object_name_to_channel_map["winnable_condition"]
-                elif obj.name in pushable_obj_names: channel_idx = self.object_name_to_channel_map["pushable_physical"]
-                elif obj.name in stoppable_obj_names: channel_idx = self.object_name_to_channel_map["stopping_physical"]
-                elif obj.name in kill_obj_names: channel_idx = self.object_name_to_channel_map["dangerous_physical"]
-                else: channel_idx = self.object_name_to_channel_map["general_physical"]
-                grid_representation[channel_idx, y, x] = 1.0
-        
-        all_text_objects: List[GameObj] = []
-        if state.words: all_text_objects.extend(state.words)
-        if state.keywords: all_text_objects.extend(state.keywords)
-
-        for obj in all_text_objects:
-            if not hasattr(obj, 'name'): continue
-            y, x = obj.y, obj.x
-            if 0 <= y < MAX_MAP_HEIGHT and 0 <= x < MAX_MAP_WIDTH:
-                text_key = f"text_{obj.name}"
-                channel_idx = self.object_name_to_channel_map.get(text_key, self.num_object_channels - 1)
-                grid_representation[channel_idx, y, x] = 1.0
-
-        flattened_grid = grid_representation.flatten()
-        rule_features = np.zeros(NUM_RULE_FEATURES, dtype=np.float32)
-        if player_obj_names: rule_features[0] = 1.0
-        if winnable_obj_names: rule_features[1] = 1.0
-        return np.concatenate((flattened_grid, rule_features))
-
-    def _get_action_from_model(self, vectorized_state: np.array) -> Direction:
-        """Queries the model to get an action for the given vectorized state."""
-        action_index: int
-        if TF_AVAILABLE and isinstance(self.model, keras.Model):
-            predictions = self.model.predict(vectorized_state.reshape(1, -1), verbose=0)
-            action_index = np.argmax(predictions[0])
-        else:
-            action_index = self.model.predict(vectorized_state)
-
-        return INDEX_TO_ACTION[action_index]
-
-    def search(self, initial_state: GameState, iterations: int) -> List[Direction]:
-        """Executes the learned policy for a maximum of `iterations` steps."""
-        current_state = initial_state.copy()
-        path_taken: List[Direction] = []
-
-        if not current_state.players:
-            return []
-
-        for _ in range(iterations):
-            vectorized_state = self._vectorize_state(current_state)
-            chosen_action = self._get_action_from_model(vectorized_state)
-            
-            path_taken.append(chosen_action)
-            current_state = advance_game_state(chosen_action, current_state.copy())
-
-            if check_win(current_state) or not current_state.players:
+        for step in range(max_steps):
+            if not beam:
                 break
-            
-        return path_taken
 
-if __name__ == '__main__':
-    # This block remains for potential standalone testing.
-    pass
+            potential_candidates = []
+            for log_prob, path, game_state in beam:
+                if check_win(game_state):
+                    potential_candidates.append((log_prob, path, game_state))
+                    continue
+                
+                temp_env = BabaEnv([base_env.current_ascii_map], self.MODEL_MAX_H, self.MODEL_MAX_W)
+                temp_env.state = game_state
+                temp_env.episode_steps = len(path)
+                obs = temp_env._get_obs()
+
+                with torch.no_grad():
+                    state_tensor = torch.tensor(np.array(obs), device=self.device, dtype=torch.float32).unsqueeze(0)
+                    action_log_probs = F.log_softmax(self.policy_net(state_tensor), dim=1)
+                    
+                    # Ora questa chiamata è sicura perché beam_width <= n_actions
+                    top_log_probs, top_actions = torch.topk(action_log_probs, beam_width)
+
+                    for i in range(beam_width):
+                        action_idx = top_actions[0, i].item()
+                        current_log_prob = top_log_probs[0, i].item()
+                        
+                        next_state = game_state.copy()
+                        direction = base_env.action_map[action_idx]
+                        next_state = advance_game_state(direction, next_state)
+
+                        new_path = path + [direction]
+                        new_log_prob = log_prob + current_log_prob
+                        potential_candidates.append((new_log_prob, new_path, next_state))
+
+            def score_path(candidate):
+                log_prob, path, state = candidate
+                if check_win(state): return float('inf')
+                return log_prob / len(path) if path else -float('inf')
+
+            sorted_candidates = sorted(potential_candidates, key=score_path, reverse=True)
+            beam = [(log_prob, path, state) for log_prob, path, state in sorted_candidates[:beam_width]]
+
+            if beam and check_win(beam[0][2]):
+                print(f"✨ Soluzione trovata al passo {step + 1} con Beam Search!")
+                return beam[0][1]
+
+        print("❌ Nessuna soluzione trovata entro il limite di passi con Beam Search.")
+        return []
