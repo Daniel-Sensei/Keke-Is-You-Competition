@@ -72,7 +72,7 @@ class A_STARAgent(BaseAgent):
         for _ in range(self.max_iterations):
             if time.time() - start_time > time_limit:
                 print("⏰ Tempo massimo raggiunto.")
-                return None
+                return 0
 
             if not open_set:
                 break

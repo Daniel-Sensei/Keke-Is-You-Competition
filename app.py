@@ -552,6 +552,6 @@ def get_leaderboard():
 
 if __name__ == '__main__':
     # Trova una porta libera
-    port = 5003
+    port = 5001
     print(f"Avvio del server Flask su http://localhost:{port}")
     app.run(debug=True, port=port)

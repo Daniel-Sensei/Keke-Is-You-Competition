@@ -1,13 +1,11 @@
 import heapq
 import itertools
 import time
-from typing import List, Dict, Tuple, Set, Optional
+from typing import List, Dict, Tuple, Optional
 
 from base_agent import BaseAgent
 from baba import (GameState, Direction, GameObj, GameObjectType, advance_game_state,
                   check_win, name_to_character)
-
-# --- Funzioni Ausiliarie (invariate) ---
 
 def manhattan_distance(p1: Tuple[int, int], p2: Tuple[int, int]) -> int:
     return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
@@ -26,7 +24,6 @@ def analyze_current_rules(state: GameState) -> Dict[str, List[str]]:
             rule_analysis['other_rules'].append(rule)
     return rule_analysis
 
-# --- Classe per HeapQ Entry (invariata) ---
 class HeapQEntry:
     def __init__(self, priority: float, g_score: int, tie_breaker: int, actions: List[Direction], state: GameState):
         self.priority = priority
@@ -42,8 +39,7 @@ class HeapQEntry:
             return self.g_score > other.g_score
         return self.tie_breaker < other.tie_breaker
 
-# --- Agente A* con limite massimo di mosse ---
-class LVL8_A_STARAgent(BaseAgent):
+class A_STAR_YOUAgent(BaseAgent):
     def __init__(self):
         super().__init__()
         self.max_iterations = 200000
@@ -51,12 +47,12 @@ class LVL8_A_STARAgent(BaseAgent):
         self.W_REACH_WIN = 1.0
         self.W_FORM_RULE = 1.0
         self.P_NO_WIN_RULE = 100
-        self.P_NO_YOU_RULE = 350
-        self.max_path_length = 50  # ✅ Nuovo limite di mosse
+        self.P_SUBOPTIMAL_YOU_RULE = 200
+        self.max_path_length = 50
 
     def search(self, initial_state: GameState, iterations: int = 10000) -> Optional[List[Direction]]:
         start_time = time.time()
-        time_limit = 400  # secondi
+        time_limit = 400
 
         start_h = self._heuristic(initial_state)
         if start_h == float('inf'):
@@ -72,7 +68,7 @@ class LVL8_A_STARAgent(BaseAgent):
         for _ in range(self.max_iterations):
             if time.time() - start_time > time_limit:
                 print("⏰ Tempo massimo raggiunto.")
-                return None
+                return 0
 
             if not open_set:
                 break
@@ -85,7 +81,7 @@ class LVL8_A_STARAgent(BaseAgent):
 
             for direction in [Direction.Up, Direction.Down, Direction.Left, Direction.Right]:
                 if len(actions) >= self.max_path_length:
-                    continue  # ❌ Salta espansioni oltre il limite
+                    continue
 
                 next_state = advance_game_state(direction, current_state.copy())
                 new_g_score = g_score + 1
@@ -107,47 +103,39 @@ class LVL8_A_STARAgent(BaseAgent):
         print("⚠️ Nessuna soluzione trovata entro il limite di 60 mosse.")
         return None
 
-    # Versione corretta
     def _heuristic(self, state: GameState) -> float:
         if check_win(state):
             return 0
-        
-        # Analizza subito le regole
+        if not state.players:
+            return float('inf')
+
         rule_analysis = analyze_current_rules(state)
         has_you = bool(rule_analysis['you_rules'])
-
-        # Se non c'è un giocatore (perché la regola 'YOU' è rotta o assente),
-        # non arrenderti. Calcola invece il costo per crearne una.
-        if not state.players or not has_you:
-            cost = self._estimate_rule_formation_cost(state, 'you')
-            # Se è impossibile creare la regola, ALLORA è infinito.
-            if cost == float('inf'):
-                return float('inf')
-            # Altrimenti, restituisci una penalità alta più il costo.
-            return self.P_NO_YOU_RULE + cost
-
         has_win = bool(rule_analysis['win_rules'])
 
-        if has_win: # has_you è già stato verificato essere True a questo punto
-            # ... il resto della logica rimane quasi invariato
+        if has_you and has_win:
             if state.winnables:
-                min_dist = float('inf')
-                for player in state.players:
-                    for winnable in state.winnables:
-                        dist = manhattan_distance((player.x, player.y), (winnable.x, winnable.y))
-                        min_dist = min(min_dist, dist)
+                min_dist = min(
+                    manhattan_distance((p.x, p.y), (w.x, w.y))
+                    for p in state.players for w in state.winnables
+                )
                 return min_dist * self.W_REACH_WIN
-            else:
-                winnable_noun = rule_analysis['win_rules'][0].split('-is-')[0]
-                cost = self._estimate_rule_formation_cost(state, winnable_noun)
-                if cost == float('inf'):
-                    return float('inf')
-                return self.P_NO_WIN_RULE + cost
-        else: # Manca la regola WIN
-            cost = self._estimate_rule_formation_cost(state, 'win')
-            if cost == float('inf'):
-                return float('inf')
-            return self.P_NO_WIN_RULE + cost
+
+            win_noun = rule_analysis['win_rules'][0].split('-is-')[0]
+            cost = self._estimate_rule_formation_cost(state, win_noun)
+            return self.P_NO_WIN_RULE + cost if cost != float('inf') else float('inf')
+
+        # Analizza se si può cambiare o creare una regola is-you promettente
+        cost = float('inf')
+        possible_you_targets = self._find_possible_you_targets(state)
+        for target in possible_you_targets:
+            c = self._estimate_rule_formation_cost(state, target)
+            cost = min(cost, c)
+
+        if cost < float('inf'):
+            return self.P_SUBOPTIMAL_YOU_RULE + cost
+
+        return float('inf')
 
     def _estimate_rule_formation_cost(self, state: GameState, target_property_name: str) -> float:
         nouns = [w for w in state.words if w.object_type == GameObjectType.Word and w.name != 'is']
@@ -158,37 +146,36 @@ class LVL8_A_STARAgent(BaseAgent):
             return float('inf')
 
         min_formation_dist = float('inf')
-
         for noun in nouns:
             if noun.name == target_property_name:
                 continue
-            dist_to_is = min([manhattan_distance((noun.x, noun.y), (iw.x, iw.y)) for iw in is_words])
-            dist_to_prop = min([manhattan_distance((noun.x, noun.y), (pw.x, pw.y)) for pw in property_words])
-            current_dist = dist_to_is + dist_to_prop
-            min_formation_dist = min(min_formation_dist, current_dist)
+            dist_to_is = min(manhattan_distance((noun.x, noun.y), (iw.x, iw.y)) for iw in is_words)
+            dist_to_prop = min(manhattan_distance((noun.x, noun.y), (pw.x, pw.y)) for pw in property_words)
+            total_dist = dist_to_is + dist_to_prop
+            min_formation_dist = min(min_formation_dist, total_dist)
 
         if state.players:
-            player_dist = min([manhattan_distance((p.x, p.y), (n.x, n.y)) for p in state.players for n in nouns])
+            player_dist = min(manhattan_distance((p.x, p.y), (n.x, n.y)) for p in state.players for n in nouns)
             return (min_formation_dist + player_dist) * self.W_FORM_RULE
 
         return min_formation_dist * self.W_FORM_RULE
 
+    def _find_possible_you_targets(self, state: GameState) -> List[str]:
+        # Cerca parole che potrebbero diventare il soggetto di una regola is-you
+        return list(set(w.name for w in state.words if w.name not in ['is', 'you']))
+
     def _get_state_hash(self, state: GameState) -> Optional[str]:
-        """
-        Genera un hash univoco per lo stato del gioco.
-        L'hash deve essere unico anche in assenza di giocatori,
-        basandosi sulla posizione di parole e oggetti fisici.
-        """
+        if not state.players:
+            return "NO_PLAYERS_STATE"
+
         components = []
+        player_pos = sorted((p.x, p.y) for p in state.players)
+        components.append(f"P:{','.join(map(str, player_pos))}")
 
-        # Ordina le componenti per garantire un hash consistente
-        player_pos = sorted([(p.x, p.y) for p in state.players])
-        word_pos = sorted([(w.name, w.x, w.y) for w in state.words])
-        phys_pos = sorted([(o.name, o.x, o.y) for o in state.phys])
+        word_pos = sorted((w.name, w.x, w.y) for w in state.words)
+        components.append(f"W:{','.join(map(str, word_pos))}")
 
-        # Concatena tutte le informazioni in una stringa univoca
-        components.append(f"P:{player_pos}")
-        components.append(f"W:{word_pos}")
-        components.append(f"O:{phys_pos}")
+        phys_pos = sorted((o.name, o.x, o.y) for o in state.phys)
+        components.append(f"O:{','.join(map(str, phys_pos))}")
 
         return "|".join(components)
