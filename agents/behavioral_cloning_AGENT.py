@@ -1,18 +1,17 @@
-# behavioral_cloning_AGENT.py (Versione con Architettura ResNet e Beam Search Corretta)
+# behavioral_cloning_AGENT.py (Versione con Correzione TypeError)
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-from typing import Optional, List
-import os
-import copy
+from typing import Optional, List, Dict, Tuple
 
 from base_agent import BaseAgent
 from baba_env import BabaEnv, check_win, advance_game_state
-from baba import GameState, Direction
+from baba import GameState, Direction, GameObj, GameObjectType
 
+# --- Architettura della Rete (ResNet) ---
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super(ResidualBlock, self).__init__()
@@ -58,6 +57,8 @@ class DQN_ResNet(nn.Module):
         out = self.avg_pool(out).view(out.size(0), -1)
         return self.fc_stack(out)
 
+
+# --- Agente Principale ---
 class BEHAVIORAL_CLONINGAgent(BaseAgent):
     def __init__(self, model_path='baba_final_agent.pth'):
         super().__init__()
@@ -90,40 +91,92 @@ class BEHAVIORAL_CLONINGAgent(BaseAgent):
         if self.policy_net:
             torch.save(self.policy_net.state_dict(), save_path)
             print(f"💾 Modello salvato con successo in '{save_path}'.")
+    
+    # --- METODI EURISTICI (dall'agente A*) ---
+    def _manhattan_distance(self, p1: Tuple[int, int], p2: Tuple[int, int]) -> int:
+        return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
+    def _find_word_objects(self, state: GameState, word_name: str) -> List[GameObj]:
+        return [w for w in state.words if w.name == word_name]
+
+    def _analyze_current_rules(self, state: GameState) -> Dict[str, List[str]]:
+        rule_analysis = {'you_rules': [], 'win_rules': [], 'other_rules': []}
+        if not hasattr(state, 'rules'): return rule_analysis
+        for rule in state.rules:
+            if '-is-you' in rule: rule_analysis['you_rules'].append(rule)
+            elif '-is-win' in rule: rule_analysis['win_rules'].append(rule)
+            else: rule_analysis['other_rules'].append(rule)
+        return rule_analysis
+
+    def _heuristic(self, state: GameState) -> float:
+        if check_win(state): return 0
+        if not state.players: return float('inf')
+
+        rule_analysis = self._analyze_current_rules(state)
+        has_you = bool(rule_analysis['you_rules'])
+        has_win = bool(rule_analysis['win_rules'])
+
+        if has_you and has_win:
+            if state.winnables:
+                min_dist = min(self._manhattan_distance((p.x, p.y), (w.x, w.y)) for p in state.players for w in state.winnables)
+                return min_dist
+            else: return 100.0
+        
+        if not has_you:
+            cost = self._estimate_rule_formation_cost(state, 'you')
+            return 500.0 + cost
+
+        if not has_win:
+            cost = self._estimate_rule_formation_cost(state, 'win')
+            return 100.0 + cost
+
+        return float('inf')
+
+    def _estimate_rule_formation_cost(self, state: GameState, target_property_name: str) -> float:
+        nouns = [w for w in state.words if w.object_type == GameObjectType.Word and w.name != 'is']
+        is_words = self._find_word_objects(state, 'is')
+        property_words = self._find_word_objects(state, target_property_name)
+
+        if not nouns or not is_words or not property_words: return float('inf')
+
+        min_formation_dist = float('inf')
+        for noun in nouns:
+            if noun.name == target_property_name: continue
+            dist_to_is = min(self._manhattan_distance((noun.x, noun.y), (iw.x, iw.y)) for iw in is_words)
+            dist_to_prop = min(self._manhattan_distance((noun.x, noun.y), (pw.x, pw.y)) for pw in property_words)
+            min_formation_dist = min(min_formation_dist, dist_to_is + dist_to_prop)
+        
+        return min_formation_dist if min_formation_dist != float('inf') else float('inf')
+
+    # --- METODO DI RICERCA AGGIORNATO ---
     def search(self, initial_state: GameState, iterations: int) -> Optional[List[Direction]]:
-        """
-        Esegue una ricerca della soluzione usando l'algoritmo Beam Search per migliorare
-        la robustezza rispetto a una ricerca greedy.
-        """
-        if self.policy_net is None:
-            self.initialize_for_inference()
-        if self.policy_net is None:
-            return None
+        if self.policy_net is None: self.initialize_for_inference()
+        if self.policy_net is None: return None
 
-        # --- Inizializzazione ---
         base_env = BabaEnv(["\n".join("".join(row) for row in initial_state.orig_map)], self.MODEL_MAX_H, self.MODEL_MAX_W)
         base_env.reset()
         
-        # --- Parametri della Beam Search ---
-        # Correzione: assicurati che beam_width non sia maggiore del numero di azioni disponibili
         n_actions = base_env.action_space.n
-        beam_width = min(5, n_actions) # <-- RIGA MODIFICATA E SPOSTATA
-        max_steps = min(iterations, 100)
+        beam_width = 20
+        max_path_length = 200
+        heuristic_weight = 0.05
 
+        beam = [(0.0, 0.0, [], initial_state.copy())]
+        visited_states = {}
 
-        # Il "beam" contiene tuple di: (log_probabilità_cumulativa, percorso_azioni, stato_ambiente_clonato)
-        beam = [(0.0, [], initial_state.copy())]
-
-        for step in range(max_steps):
-            if not beam:
-                break
+        for step in range(max_path_length):
+            if not beam: break
 
             potential_candidates = []
-            for log_prob, path, game_state in beam:
+            for score, model_log_prob, path, game_state in beam:
                 if check_win(game_state):
-                    potential_candidates.append((log_prob, path, game_state))
+                    print(f"✨ Soluzione trovata al passo {len(path)}!")
+                    return path
+
+                state_representation = tuple(sorted([str((obj.name, obj.x, obj.y)) for obj in game_state.phys + game_state.words] + game_state.rules))
+                if state_representation in visited_states and visited_states[state_representation] >= model_log_prob:
                     continue
+                visited_states[state_representation] = model_log_prob
                 
                 temp_env = BabaEnv([base_env.current_ascii_map], self.MODEL_MAX_H, self.MODEL_MAX_W)
                 temp_env.state = game_state
@@ -134,32 +187,29 @@ class BEHAVIORAL_CLONINGAgent(BaseAgent):
                     state_tensor = torch.tensor(np.array(obs), device=self.device, dtype=torch.float32).unsqueeze(0)
                     action_log_probs = F.log_softmax(self.policy_net(state_tensor), dim=1)
                     
-                    # Ora questa chiamata è sicura perché beam_width <= n_actions
-                    top_log_probs, top_actions = torch.topk(action_log_probs, beam_width)
-
-                    for i in range(beam_width):
-                        action_idx = top_actions[0, i].item()
-                        current_log_prob = top_log_probs[0, i].item()
+                    for action_idx in range(n_actions):
+                        # <-- CORREZIONE APPLICATA QUI
+                        # Chiama la funzione con argomenti posizionali, come richiesto dalla sua definizione
+                        next_state = advance_game_state(base_env.action_map[action_idx], game_state.copy())
                         
-                        next_state = game_state.copy()
-                        direction = base_env.action_map[action_idx]
-                        next_state = advance_game_state(direction, next_state)
+                        h_score = self._heuristic(next_state)
+                        if h_score == float('inf'): continue
 
-                        new_path = path + [direction]
-                        new_log_prob = log_prob + current_log_prob
-                        potential_candidates.append((new_log_prob, new_path, next_state))
+                        action_prob = action_log_probs[0, action_idx].item()
+                        new_model_log_prob = model_log_prob + action_prob
+                        
+                        combined_score = new_model_log_prob - (heuristic_weight * h_score)
 
-            def score_path(candidate):
-                log_prob, path, state = candidate
-                if check_win(state): return float('inf')
-                return log_prob / len(path) if path else -float('inf')
+                        potential_candidates.append((combined_score, new_model_log_prob, path + [base_env.action_map[action_idx]], next_state))
 
-            sorted_candidates = sorted(potential_candidates, key=score_path, reverse=True)
-            beam = [(log_prob, path, state) for log_prob, path, state in sorted_candidates[:beam_width]]
+            if not potential_candidates: break
 
-            if beam and check_win(beam[0][2]):
-                print(f"✨ Soluzione trovata al passo {step + 1} con Beam Search!")
-                return beam[0][1]
+            sorted_candidates = sorted(potential_candidates, key=lambda x: x[0], reverse=True)
+            beam = sorted_candidates[:beam_width]
 
-        print("❌ Nessuna soluzione trovata entro il limite di passi con Beam Search.")
+        if beam and check_win(beam[0][3]):
+             print(f"✨ Soluzione trovata alla fine della ricerca!")
+             return beam[0][2]
+
+        print(f"❌ Nessuna soluzione trovata entro il limite di {max_path_length} passi.")
         return []

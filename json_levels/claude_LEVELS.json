@@ -1,0 +1,142 @@
+{"levels": [
+    {
+        "id": "new_1",
+        "name": "Simple Push",
+        "author": "Claude",
+        "ascii": "__________\n_B12..R15_\n_........_\n_..b..r.._\n_........_\n_..5....._\n_........_\n_.....f.._\n_..F13..._\n__________",
+        "solution": "ddrrrruuulldddrrr"
+    },
+    {
+        "id": "new_2",
+        "name": "Wall Maze",
+        "author": "Claude",
+        "ascii": "__________\n_B12.wwww_\n_..b.w..f_\n_wwwww..._\n_F......._\n_1wwwwww._\n_3......._\n_wwwwwww._\n_........_\n__________",
+        "solution": "dddrrruuurrrdddllllluuuurrrrrddd"
+    },
+    {
+        "id": "new_3",
+        "name": "Love Conquers",
+        "author": "Claude",
+        "ascii": "__________\n_V12..B12_\n_........_\n_v..b...._\n_........_\n_wwwwwwww_\n_........_\n_...f...._\n_..F13..._\n__________",
+        "solution": "llldddrrr"
+    },
+    {
+        "id": "new_4",
+        "name": "Skull Danger",
+        "author": "Claude",
+        "ascii": "__________\n_B12S14.._\n_........_\n_b.sssss._\n_..s...s._\n_..s.f.s._\n_..sssss._\n_........_\n_F13....._\n__________",
+        "solution": "drrrrdddlllluurrrrdddd"
+    },
+    {
+        "id": "new_5",
+        "name": "Rock Transform",
+        "author": "Claude",
+        "ascii": "__________\n_B1R12..._\n_........_\n_b.r....._\n_........_\n_...F...._\n_...1...._\n_...3...._\n_...f...._\n__________",
+        "solution": "drrddddr"
+    },
+    {
+        "id": "new_6",
+        "name": "Goop Lake",
+        "author": "Claude",
+        "ascii": "__________\n_B12.G10._\n_....G17._\n_b.ggggg._\n_..g...g._\n_..g.f.g._\n_..ggggg._\n_........_\n_F13....._\n__________",
+        "solution": "ddrrrrddddlllluuurrrrdddd"
+    },
+    {
+        "id": "new_7",
+        "name": "Keke Helper",
+        "author": "Claude",
+        "ascii": "__________\n_K17B12.._\n_k......._\n_........_\n_..b.f..._\n_........_\n_....K..._\n_....1..._\n_F13.2..._\n__________",
+        "solution": "lldddrrrruuuu"
+    },
+    {
+        "id": "new_8",
+        "name": "Lava Bridge",
+        "author": "Claude",
+        "ascii": "__________\n_B12L14.._\n_....L18._\n_b.llllll_\n_..l....._\n_R.l..f.._\n_1......._\n_5......._\n_..F13..._\n__________",
+        "solution": "ddllurrrrdddd"
+    },
+    {
+        "id": "new_9",
+        "name": "Double Baba",
+        "author": "Claude",
+        "ascii": "__________\n_B1B12..._\n_........_\n_b.b....._\n_........_\n_...f...._\n_........_\n_F......._\n_13......_\n__________",
+        "solution": "rrrdddrrruuulllddd"
+    },
+    {
+        "id": "new_10",
+        "name": "Sink Puzzle",
+        "author": "Claude",
+        "ascii": "__________\n_B12G10.._\n_........_\n_b.g....._\n_..g....._\n_..gggr.._\n_....R15._\n_f......._\n_F130...._\n__________",
+        "solution": "ddrrrruulllddddd"
+    },
+    {
+        "id": "new_11",
+        "name": "Move Chain",
+        "author": "Claude",
+        "ascii": "__________\n_B12K17.._\n_........_\n_b.kkk..._\n_..k.k..._\n_..k.k..._\n_....k..._\n_..f....._\n_F137...._\n__________",
+        "solution": "ddrrruuurrddddllllluuurrrrddd"
+    },
+    {
+        "id": "new_12",
+        "name": "Wall is Stop",
+        "author": "Claude",
+        "ascii": "__________\n_W16B12.._\n_w......._\n_w.b....._\n_w......._\n_wwwww..._\n_........_\n_..f....._\n_F13....._\n__________",
+        "solution": "ddrrddlluurrrrddd"
+    },
+    {
+        "id": "new_13",
+        "name": "Hot and Melt",
+        "author": "Claude",
+        "ascii": "__________\n_B12L14.._\n_....L18._\n_b.l....._\n_..l....._\n_..llr..._\n_....R19._\n_f......._\n_F138...._\n__________",
+        "solution": "ddrrrruullldddd"
+    },
+    {
+        "id": "new_14",
+        "name": "Flag Circle",
+        "author": "Claude",
+        "ascii": "__________\n_........_\n_..ffff.._\n_..f..f.._\n_..f.bf.._\n_..ffff.._\n_........_\n_B12F13.._\n_........_\n__________",
+        "solution": "uuurrddlluurrdd"
+    },
+    {
+        "id": "new_15",
+        "name": "You and Win",
+        "author": "Claude",
+        "ascii": "__________\n_B......._\n_1.....3._\n_2......._\n_........_\n_b......f_\n_........_\n_........_\n_....F1.._\n__________",
+        "solution": "ddddrrrruuuu"
+    },
+    {
+        "id": "new_16",
+        "name": "Rock Prison",
+        "author": "Claude",
+        "ascii": "__________\n_R15B12.._\n_rrrrrr.._\n_r....r.._\n_r.bf.r.._\n_r....r.._\n_rrrrrr.._\n_........_\n_..F13..._\n__________",
+        "solution": "lldddrruurrruullldddd"
+    },
+    {
+        "id": "new_17",
+        "name": "Grass Field",
+        "author": "Claude",
+        "ascii": "__________\n_A18B12.._\n_aaaaaaa._\n_a.....a._\n_a..b..a._\n_a.....a._\n_aaaaaaa._\n_...f...._\n_..F13..._\n__________",
+        "solution": "llddddrrr"
+    },
+    {
+        "id": "new_18",
+        "name": "Skull Maze",
+        "author": "Claude",
+        "ascii": "__________\n_S14B12.._\n_sssssss._\n_...b..s._\n_s.sss.s._\n_s.....s._\n_sssssss._\n_....f..._\n_..F13..._\n__________",
+        "solution": "llddlllddrrrruuurrdddddd"
+    },
+    {
+        "id": "new_19",
+        "name": "Love is Push",
+        "author": "Claude",
+        "ascii": "__________\n_V15B12.._\n_v......._\n_v.b....._\n_v......._\n_vvvvv..._\n_........_\n_..f....._\n_F13....._\n__________",
+        "solution": "lllddrrrruullldddrrr"
+    },
+    {
+        "id": "new_20",
+        "name": "Final Challenge",
+        "author": "Claude",
+        "ascii": "__________\n_B1R1K1S1_\n_2522742._\n_b.r.k.s._\n_........_\n_wwwwwwww_\n_........_\n_...f...._\n_F13W16.._\n__________",
+        "solution": "drrddllddrrddlluurruulluurruulldddrrrdddlllrrr"
+    }
+]}
