@@ -6,8 +6,6 @@ KekeAI is a comprehensive platform for developing, testing, and evaluating intel
 
 <img width="417" height="419" alt="Screenshot 2026-02-05 at 10 47 45" src="https://github.com/user-attachments/assets/4e5dc146-b9cf-497a-aaff-6516db56903e" />
 
-<img width="225" height="226" alt="Screenshot 2026-02-05 at 10 56 11" src="https://github.com/user-attachments/assets/1b7d9772-e32a-4927-b4c2-7f6d1c075a5b" />
-
 ## Project Structure
 
 The project is organized into several core modules:
